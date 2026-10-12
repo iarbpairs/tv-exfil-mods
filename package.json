@@ -1,0 +1,9 @@
+{
+    "name": "tv-exfil-mods",
+    "version": "1.0.0",
+    "packageType": "mods",
+    "main": "index.js",
+    "serviceFile": "index.js",
+    "appName": "TV Exfil",
+    "description": "Tizen system data collection via TizenBrew service sandbox"
+}
